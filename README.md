@@ -58,7 +58,7 @@ npm run dev
 | 数据筛选 | `data_filter` | 筛选规则 | 规则编号、数据来源、筛选字段 |
 | 归因分析 | `attr_analysis` | 归因任务 | 任务编号、目标指标、候选因子 |
 | 异常检测 | `anomaly_detect` | 检测规则 | 规则编号、监控指标、检测算法 |
-| 预测模型 | `forecast_model` | 模型配置 | 模型编号、预测对象、历史窗口 |
+| 预测模型 | `forecast_model` | 模型配置、训练批次、预测结果表 | 模型编号、预测对象、历史窗口 |
 | 数据导出 | `data_export` | 导出任务 | 任务编号、数据来源、导出格式 |
 | 同期群追踪 | `cohort_track` | 同期群定义 | 群组编号、群组名称、首次行为 |
 | 可视化配置 | `chart_config` | 图表配置 | 图表编号、图表类型、数据来源 |
@@ -74,6 +74,20 @@ npm run dev
   `backend/app/routers/<模块>.py`，业务规则在 `backend/app/services/<模块>.py`。
 - 列表接口统一返回 `{ items, total, page, size }`，动作接口统一返回 `{ ok, message }`。
 - 状态流转只允许在 `app/services` 里改，路由层不做业务判断。
+
+### V006 预测批次与预测结果表
+
+- 训练批次（`forecast_batch`）与预测结果表（`forecast_result`）同事务落库，列表刷新可回溯唯一来源；
+- 每个预测点绑定训练批次与指标口径（指标编号、口径版本、精度位数）；
+- 预测值须满足口径规则与阈值条件，超出范围或越过上限时按阈值拒绝，整批被拒则回滚并留档；
+- 同一模型同一业务周期重复训练产生版本冲突：默认最新批次替换并归档旧批次，
+  可选 `冲突策略=coexist` 双批并存、按消费场景（默认最新批次 / `消费场景=对比`）读取；
+- 训练中断后只能续训补写未完成周期，不能覆盖上一完整预测批次；
+- `POST /api/forecast_model/consistency_check` 一致性核对：发现无来源残留、重复期次或
+  双批次事务异常时回滚清残留，并按 V006 留档（`forecast_archive`）核对；
+- 跨模块联动：`GET /api/metric_def/forecast_precision` 由指标定义模块读取预测结果表的
+  指标标识和精度位数，校验预测值展示精度；
+- 接收方通过 `GET /api/forecast_model/results/export` 获取全份 V006 预测结果表。
 
 领域：数据工程
 子方向：数据分析与数据应用

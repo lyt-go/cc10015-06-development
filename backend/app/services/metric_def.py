@@ -1,6 +1,7 @@
 """指标定义业务规则：状态流转、字段校验与筛选口径都收在这里。"""
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import Any
 
 from app.store import store
@@ -63,3 +64,45 @@ class MetricDefService:
         entry["pending"] = target != STATUS_ORDER[-1]
         entry["abnormal"] = action in NEGATIVE_ACTIONS
         return entry, f"指标定义已{action}"
+
+    def validate_forecast_precision(self) -> dict[str, Any]:
+        """V006 跨模块联动：读取预测结果表的指标标识和精度位数，校验预测值展示精度。"""
+        rows = store.rows("forecast_result")
+        groups: dict[str, list[dict[str, Any]]] = {}
+        for row in rows:
+            groups.setdefault(str(row.get("指标编号") or "未绑定指标"), []).append(row)
+        items: list[dict[str, Any]] = []
+        for code, group in sorted(groups.items()):
+            metric = store.find_by_field(MODULE, "指标编号", code)
+            defined_precision: int | None = None
+            if metric is not None:
+                try:
+                    defined_precision = int(str(metric.get("精度位数")).strip())
+                except (TypeError, ValueError):
+                    defined_precision = None
+            table_precisions = sorted({int(r.get("精度位数", -1)) for r in group})
+            over_limit = 0
+            for r in group:
+                precision = int(r.get("精度位数", 4))
+                exponent = Decimal(str(r.get("预测值", "0"))).as_tuple().exponent
+                decimals = max(0, -exponent) if isinstance(exponent, int) else 0
+                if decimals > precision:
+                    over_limit += 1
+            issues: list[str] = []
+            if metric is None:
+                issues.append("指标定义不存在")
+            if defined_precision is not None and any(p != defined_precision for p in table_precisions):
+                issues.append(f"结果表精度{table_precisions}与指标定义精度{defined_precision}不一致")
+            if over_limit:
+                issues.append(f"{over_limit}个预测值展示精度超过精度位数")
+            items.append({
+                "指标编号": code,
+                "指标名称": (metric or {}).get("指标名称", "—"),
+                "口径版本": group[-1].get("口径版本", ""),
+                "结果表精度": table_precisions,
+                "定义精度": defined_precision if defined_precision is not None else "—",
+                "预测点数": len(group),
+                "精度超限点": over_limit,
+                "校验结论": "通过" if not issues else "；".join(issues),
+            })
+        return {"items": items, "total": len(items)}
